@@ -55,3 +55,12 @@ External HTTP calls are mocked with unittest.mock, so tests run offline.
 ## Git workflow used
 Feature branches (feature/crud-routes, feature/external-api, feature/cli, feature/tests),
 each merged into main through a pull request and deleted after merging.
+
+## Interactive menu
+Run the CLI with no arguments to open a menu-driven interface:
+
+    python cli.py
+
+From the menu you can list, view, add, update and delete items, look up a product by barcode,
+or search OpenFoodFacts by name and add a result straight into the inventory.
+The one-shot commands above still work for scripting.
