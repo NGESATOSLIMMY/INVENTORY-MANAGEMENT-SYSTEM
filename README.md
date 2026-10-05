@@ -71,3 +71,32 @@ The one-shot commands above still work for scripting.
 The menu starts the API server for you and stops it when you quit.
 Inventory is kept in memory, so it resets each time. If you already run
 `python app.py` in another terminal, the menu uses that server instead.
+
+## Problem
+A small retail company needs an administrator portal so employees can add, edit, view and
+delete inventory items, and fill in product details automatically from OpenFoodFacts
+instead of typing them by hand.
+
+Requirements:
+- A Flask REST API with CRUD operations for inventory
+- An external API integration to fetch product details by barcode or name
+- A CLI interface to use the API
+- Unit tests for the API, the external integration and the CLI
+
+## Design
+    CLI (cli.py)  --HTTP-->  Flask API (app.py)  --HTTP-->  OpenFoodFacts
+                                   |
+                         in-memory list (inventory)
+
+- Item fields: id, name, brand, barcode, price, quantity, ingredients
+- Inventory is stored in an in-memory list, which resets when the server restarts
+- external_api.py is the only module that talks to OpenFoodFacts, so it is easy to mock in tests
+- The CLI never touches the data directly; it only calls the API
+- Errors are returned as JSON with 400 (bad input), 404 (not found) or 502 (external API failure)
+
+## Troubleshooting
+- "Port 5000 is in use": an old server is still running. Stop it with `pkill -f "python app.py"`.
+- "No module named py" when running pytest: reinstall it with `pip install --force-reinstall pytest`.
+- OpenFoodFacts allows 15 product lookups and 10 searches per minute; wait a minute if you hit the limit.
+- "503 Service Temporarily Unavailable" from the name search: OpenFoodFacts' search endpoint is
+  sometimes overloaded. Wait a minute and retry, or use the barcode lookup.
