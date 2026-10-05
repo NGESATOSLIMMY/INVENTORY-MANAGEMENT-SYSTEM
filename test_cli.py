@@ -47,3 +47,61 @@ def test_import_barcode(mock_req):
 
 def test_import_requires_identifier():
     assert cli.main(["import"]) == 1
+
+
+# ---- Interactive menu ----
+import requests  # noqa: E402
+
+
+def resp(status, payload):
+    m = MagicMock(status_code=status, ok=status < 400)
+    m.json.return_value = payload
+    return m
+
+
+@patch("cli.requests.request")
+@patch("builtins.input", side_effect=["1", "0"])
+def test_interactive_list(mock_input, mock_req, capsys):
+    mock_req.return_value = resp(200, [{"id": 1, "name": "Milk", "price": 1.5, "quantity": 3}])
+    assert cli.main([]) == 0
+    assert "Milk" in capsys.readouterr().out
+
+
+@patch("builtins.input", side_effect=["9", "0"])
+def test_interactive_invalid_choice(mock_input, capsys):
+    assert cli.main([]) == 0
+    assert "Invalid choice" in capsys.readouterr().out
+
+
+@patch("cli.requests.request")
+@patch("builtins.input", side_effect=["3", "Milk", "", "", "1.5", "4", "0"])
+def test_interactive_add(mock_input, mock_req):
+    mock_req.return_value = resp(201, {"id": 1, "name": "Milk"})
+    cli.main([])
+    assert mock_req.call_args[1]["json"] == {"name": "Milk", "price": 1.5, "quantity": 4}
+
+
+@patch("cli.requests.request")
+@patch("builtins.input", side_effect=["7", "nutella", "1", "4.99", "5", "0"])
+def test_interactive_search_and_add(mock_input, mock_req):
+    product = {"name": "Nutella", "brand": "Ferrero", "barcode": "3017620422003", "ingredients": "Sugar"}
+    mock_req.side_effect = [resp(200, [product]), resp(201, {"id": 1, "name": "Nutella"})]
+    cli.main([])
+    body = mock_req.call_args_list[1][1]["json"]
+    assert body["name"] == "Nutella" and body["barcode"] == "3017620422003"
+    assert body["price"] == 4.99 and body["quantity"] == 5
+
+
+@patch("cli.requests.request")
+@patch("builtins.input", side_effect=["6", "123", "n", "0"])
+def test_interactive_lookup_decline(mock_input, mock_req):
+    mock_req.return_value = resp(200, {"name": "Nutella", "brand": "Ferrero", "barcode": "123"})
+    cli.main([])
+    assert mock_req.call_count == 1
+
+
+@patch("cli.requests.request", side_effect=requests.ConnectionError("down"))
+@patch("builtins.input", side_effect=["1", "0"])
+def test_interactive_api_down(mock_input, mock_req, capsys):
+    assert cli.main([]) == 0
+    assert "Could not reach API" in capsys.readouterr().out
