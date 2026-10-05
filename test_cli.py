@@ -50,7 +50,14 @@ def test_import_requires_identifier():
 
 
 # ---- Interactive menu ----
+import pytest  # noqa: E402
 import requests  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _server_up(monkeypatch):
+    """Pretend the API is already running so tests never start a real server."""
+    monkeypatch.setattr(cli, "server_is_up", lambda: True)
 
 
 def resp(status, payload):
@@ -105,3 +112,28 @@ def test_interactive_lookup_decline(mock_input, mock_req):
 def test_interactive_api_down(mock_input, mock_req, capsys):
     assert cli.main([]) == 0
     assert "Could not reach API" in capsys.readouterr().out
+
+
+@patch("cli.requests.request")
+@patch("builtins.input", side_effect=["5", "", "0"])
+def test_interactive_delete_can_go_back(mock_input, mock_req):
+    mock_req.return_value = resp(200, [{"id": 1, "name": "Milk", "price": 1.5, "quantity": 3}])
+    cli.main([])
+    assert mock_req.call_count == 1  # only the list was fetched, nothing deleted
+
+
+@patch("builtins.input", side_effect=["0"])
+def test_interactive_autostarts_server(mock_input, monkeypatch):
+    server = MagicMock()
+    monkeypatch.setattr(cli, "server_is_up", lambda: False)
+    monkeypatch.setattr(cli, "start_local_server", lambda: server)
+    assert cli.main([]) == 0
+    server.terminate.assert_called_once()
+
+
+@patch("builtins.input", side_effect=["0"])
+def test_interactive_server_fails_to_start(mock_input, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "server_is_up", lambda: False)
+    monkeypatch.setattr(cli, "start_local_server", lambda: None)
+    assert cli.main([]) == 1
+    assert "Could not start the server" in capsys.readouterr().out

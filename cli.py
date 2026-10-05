@@ -1,20 +1,27 @@
 """Command-line interface for the inventory API.
 
-Start the server first (python app.py), then either:
-
-  Interactive menu:   python cli.py
-  Single commands:    python cli.py list
-                      python cli.py add --name "Milk" --price 1.5 --quantity 10
-                      python cli.py import --barcode 3017620422003 --quantity 5
+  python cli.py            friendly interactive menu (starts the server for you)
+  python cli.py list       one-shot commands, e.g.:
+  python cli.py add --name "Milk" --price 1.5 --quantity 10
+  python cli.py import --barcode 3017620422003 --quantity 5
 """
 import argparse
 import json
 import os
+import subprocess
 import sys
+import time
+from urllib.parse import urlparse
 
 import requests
 
+try:  # makes the arrow keys work at prompts on Linux/macOS
+    import readline  # noqa: F401
+except ImportError:
+    pass
+
 API_URL = os.environ.get("INVENTORY_API_URL", "http://127.0.0.1:5000")
+SERVER_HINT = "Is the server running? Start it with: python app.py"
 
 
 # ---------------------------------------------------------------------------
@@ -23,8 +30,8 @@ API_URL = os.environ.get("INVENTORY_API_URL", "http://127.0.0.1:5000")
 def call(method, path, **kwargs):
     try:
         resp = requests.request(method, API_URL + path, timeout=15, **kwargs)
-    except requests.RequestException as exc:
-        print(f"Could not reach API at {API_URL}: {exc}")
+    except requests.RequestException:
+        print(f"Could not reach API at {API_URL}. {SERVER_HINT}")
         return 1
     try:
         print(json.dumps(resp.json(), indent=2))
@@ -102,20 +109,51 @@ def run(args):
 
 
 # ---------------------------------------------------------------------------
+# Server helpers (the menu starts the API for you if it is not running)
+# ---------------------------------------------------------------------------
+def server_is_up():
+    try:
+        requests.get(API_URL + "/", timeout=2)
+        return True
+    except requests.RequestException:
+        return False
+
+
+def start_local_server():
+    """Start app.py in the background. Returns the process, or None on failure."""
+    parsed = urlparse(API_URL)
+    if parsed.hostname not in ("127.0.0.1", "localhost"):
+        return None
+    port = parsed.port or 5000
+    here = os.path.dirname(os.path.abspath(__file__))
+    code = f"from app import create_app; create_app().run(port={port})"
+    proc = subprocess.Popen([sys.executable, "-c", code], cwd=here,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(40):
+        if server_is_up():
+            return proc
+        if proc.poll() is not None:
+            break
+        time.sleep(0.25)
+    proc.terminate()
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Interactive menu
 # ---------------------------------------------------------------------------
 MENU = """
-==============================
-  INVENTORY MANAGEMENT SYSTEM
-==============================
-  1. List inventory
-  2. View an item
-  3. Add an item
-  4. Update an item
-  5. Delete an item
-  6. Look up a product by barcode (OpenFoodFacts)
-  7. Search OpenFoodFacts by name
-  0. Quit
+========================================
+   INVENTORY MANAGER
+========================================
+  1) Show my inventory
+  2) View one item
+  3) Add an item
+  4) Change an item
+  5) Remove an item
+  6) Find a product by barcode   (OpenFoodFacts)
+  7) Search products by name     (OpenFoodFacts)
+  0) Quit
 """
 
 
@@ -123,8 +161,8 @@ def _request(method, path, **kwargs):
     """Return (status_code, data). status_code is None if the API is unreachable."""
     try:
         resp = requests.request(method, API_URL + path, timeout=15, **kwargs)
-    except requests.RequestException as exc:
-        return None, f"Could not reach API at {API_URL}: {exc}"
+    except requests.RequestException:
+        return None, f"Could not reach API at {API_URL}. {SERVER_HINT}"
     try:
         return resp.status_code, resp.json()
     except ValueError:
@@ -132,13 +170,13 @@ def _request(method, path, **kwargs):
 
 
 def _ok(status, data):
-    """Print an error and return False if the request failed."""
+    """Print a friendly error and return False if the request failed."""
     if status is None:
         print(f"  {data}")
         return False
     if status >= 400:
         message = data.get("error", data) if isinstance(data, dict) else data
-        print(f"  Error ({status}): {message}")
+        print(f"  Sorry, that did not work ({status}): {message}")
         return False
     return True
 
@@ -149,28 +187,36 @@ def _ask(prompt, cast=str, required=True):
         if not raw:
             if not required:
                 return None
-            print("  This field is required.")
+            print("  Please type something (or press Ctrl+C to quit).")
             continue
         try:
             return cast(raw)
         except ValueError:
-            print("  Invalid value, try again.")
+            print("  That does not look right, please try again.")
 
 
 def _confirm(prompt):
     return input(prompt).strip().lower() in ("y", "yes")
 
 
-def _print_item(item):
-    print(f"  [{item.get('id')}] {item.get('name')} | brand: {item.get('brand') or '-'}"
-          f" | price: {item.get('price', '-')} | qty: {item.get('quantity', '-')}"
-          f" | barcode: {item.get('barcode') or '-'}")
+def _clip(text, width):
+    text = str(text or "-")
+    return text if len(text) <= width else text[:width - 1] + "~"
+
+
+def _print_table(items):
+    print(f"  {'ID':<4}{'Name':<28}{'Brand':<20}{'Price':>8}{'Qty':>6}")
+    print("  " + "-" * 66)
+    for item in items:
+        price = float(item.get("price") or 0)
+        print(f"  {str(item.get('id')):<4}{_clip(item.get('name'), 26):<28}"
+              f"{_clip(item.get('brand'), 18):<20}{price:>8.2f}{item.get('quantity') or 0:>6}")
 
 
 def _print_product(product):
-    ingredients = (product.get("ingredients") or "-")[:100]
-    print(f"  {product.get('name')} | brand: {product.get('brand') or '-'}"
-          f" | barcode: {product.get('barcode') or '-'}")
+    ingredients = _clip(product.get("ingredients"), 90)
+    print(f"  {product.get('name')}  |  brand: {product.get('brand') or '-'}"
+          f"  |  barcode: {product.get('barcode') or '-'}")
     print(f"    ingredients: {ingredients}")
 
 
@@ -185,22 +231,32 @@ def _price_and_quantity():
     return body
 
 
-def _menu_list():
+def _show_inventory():
+    """Print the inventory table. Returns the list of items, or None on error."""
     status, data = _request("GET", "/inventory")
     if not _ok(status, data):
-        return
+        return None
     if not data:
-        print("  Inventory is empty.")
-        return
-    for item in data:
-        _print_item(item)
+        print("  Your inventory is empty. Use option 3, 6 or 7 to add products.")
+        return data
+    _print_table(data)
+    return data
+
+
+def _menu_list():
+    _show_inventory()
 
 
 def _menu_view():
-    item_id = _ask("Item ID: ", int)
+    if not _show_inventory():
+        return
+    item_id = _ask("Item ID to view (blank to go back): ", int, required=False)
+    if item_id is None:
+        return
     status, data = _request("GET", f"/inventory/{item_id}")
     if _ok(status, data):
-        _print_item(data)
+        _print_table([data])
+        print(f"    ingredients: {_clip(data.get('ingredients'), 90)}")
 
 
 def _menu_add():
@@ -214,12 +270,16 @@ def _menu_add():
     body.update(_price_and_quantity())
     status, data = _request("POST", "/inventory", json=body)
     if _ok(status, data):
-        print("  Item added:")
-        _print_item(data)
+        print("  Added:")
+        _print_table([data])
 
 
 def _menu_update():
-    item_id = _ask("Item ID: ", int)
+    if not _show_inventory():
+        return
+    item_id = _ask("Item ID to change (blank to go back): ", int, required=False)
+    if item_id is None:
+        return
     print("  Leave a field blank to keep its current value.")
     body = {}
     name = _ask("New name: ", required=False)
@@ -230,26 +290,31 @@ def _menu_update():
         body["brand"] = brand
     body.update(_price_and_quantity())
     if not body:
-        print("  Nothing to update.")
+        print("  Nothing to change.")
         return
     status, data = _request("PATCH", f"/inventory/{item_id}", json=body)
     if _ok(status, data):
-        print("  Item updated:")
-        _print_item(data)
+        print("  Updated:")
+        _print_table([data])
 
 
 def _menu_delete():
-    item_id = _ask("Item ID: ", int)
-    if not _confirm(f"  Delete item {item_id}? (y/n): "):
+    if not _show_inventory():
+        return
+    item_id = _ask("Item ID to remove (blank to go back): ", int, required=False)
+    if item_id is None:
+        return
+    if not _confirm(f"  Really remove item {item_id}? (y/n): "):
         print("  Cancelled.")
         return
     status, data = _request("DELETE", f"/inventory/{item_id}")
     if _ok(status, data):
-        print("  Item deleted.")
+        print("  Removed.")
 
 
 def _menu_lookup():
-    barcode = _ask("Barcode: ")
+    barcode = _ask("Barcode (for example 3017620422003): ")
+    print("  Looking it up on OpenFoodFacts...")
     status, data = _request("GET", f"/external/barcode/{barcode}")
     if not _ok(status, data):
         return
@@ -259,12 +324,13 @@ def _menu_lookup():
         body.update(_price_and_quantity())
         status, data = _request("POST", "/inventory/import", json=body)
         if _ok(status, data):
-            print("  Added to inventory:")
-            _print_item(data)
+            print("  Added:")
+            _print_table([data])
 
 
 def _menu_search():
-    name = _ask("Product name to search: ")
+    name = _ask("Product name to search for: ")
+    print("  Searching OpenFoodFacts...")
     status, data = _request("GET", "/external/search", params={"name": name})
     if not _ok(status, data):
         return
@@ -274,39 +340,55 @@ def _menu_search():
     for number, product in enumerate(data, start=1):
         print(f" {number}.")
         _print_product(product)
-    choice = _ask("Pick a number to add to inventory (blank to cancel): ", int, required=False)
+    choice = _ask("Pick a number to add to your inventory (blank to cancel): ", int, required=False)
     if choice is None:
         return
     if not 1 <= choice <= len(data):
-        print("  Invalid number.")
+        print("  That number is not in the list.")
         return
     product = data[choice - 1]
     body = {k: product[k] for k in ("name", "brand", "barcode", "ingredients") if product.get(k)}
     body.update(_price_and_quantity())
     status, data = _request("POST", "/inventory", json=body)
     if _ok(status, data):
-        print("  Added to inventory:")
-        _print_item(data)
+        print("  Added:")
+        _print_table([data])
 
 
-def interactive():
+def _menu_loop():
     actions = {"1": _menu_list, "2": _menu_view, "3": _menu_add, "4": _menu_update,
                "5": _menu_delete, "6": _menu_lookup, "7": _menu_search}
     while True:
         print(MENU)
         try:
-            choice = input("Choose an option: ").strip()
+            choice = input("Choose an option (0-7): ").strip()
             if choice == "0":
                 print("Goodbye!")
                 return 0
             action = actions.get(choice)
             if action is None:
-                print("  Invalid choice, try again.")
+                print("  Invalid choice, please enter a number from the menu.")
                 continue
             action()
         except (KeyboardInterrupt, EOFError):
             print("\nGoodbye!")
             return 0
+
+
+def interactive():
+    server = None
+    if not server_is_up():
+        print("Starting the inventory server...")
+        server = start_local_server()
+        if server is None:
+            print(f"Could not start the server. {SERVER_HINT}")
+            return 1
+        print("Server ready. (Your inventory is kept in memory and resets when you quit.)")
+    try:
+        return _menu_loop()
+    finally:
+        if server is not None:
+            server.terminate()
 
 
 def main(argv=None):

@@ -64,3 +64,10 @@ Run the CLI with no arguments to open a menu-driven interface:
 From the menu you can list, view, add, update and delete items, look up a product by barcode,
 or search OpenFoodFacts by name and add a result straight into the inventory.
 The one-shot commands above still work for scripting.
+
+## Quick start (one terminal)
+    python cli.py
+
+The menu starts the API server for you and stops it when you quit.
+Inventory is kept in memory, so it resets each time. If you already run
+`python app.py` in another terminal, the menu uses that server instead.
